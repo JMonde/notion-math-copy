@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <span class="logo">&#931;</span>
+      <h1>Math Copy &#8594; Notion</h1>
+    </header>
+
+    <label class="switch-row">
+      <span>Convertir autom&#225;tico al pegar</span>
+      <input type="checkbox" id="autoConvert" />
+    </label>
+
+    <section class="help">
+      <p><b>En ChatGPT:</b> selecciona el texto con fórmulas y pulsa <kbd>Ctrl</kbd>+<kbd>C</kbd> (o usa el bot&#243;n <span class="pill">&#931;</span> del mensaje) — el LaTeX se copia exacto.</p>
+      <p><b>En Notion:</b> pega (Ctrl+V). El texto y las f&#243;rmulas se convierten a bloques nativos. Si no, pulsa <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>M</kbd>.</p>
+    </section>
+
+    <footer>Todo corre en local. No se env&#237;a nada a ning&#250;n servidor.</footer>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
