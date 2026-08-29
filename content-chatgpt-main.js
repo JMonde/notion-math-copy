@@ -11,17 +11,27 @@
   // ---------- Extraccion de markdown ----------
 
   function getRawMarkdown(msgEl) {
-    // 0) Capa fuente de escritura de ChatGPT: contiene el markdown REAL del
-    //    mensaje con LaTeX intacto ("$n$", \binom, $$ rotas), que el render
-    //    (.katex / paneles unicode) ya no conserva. Su texto es la unica
-    //    fuente fiable de las formulas.
+    // 1) Fuente de verdad: atributo data-message-content con {markdown, html} (preserva **bold**, *italic*)
+    const holder0 = msgEl.hasAttribute("data-message-content")
+      ? msgEl
+      : msgEl.querySelector("[data-message-content]");
+    if (holder0 && holder0.hasAttribute("data-message-content")) {
+      try {
+        const parsed = JSON.parse(holder0.getAttribute("data-message-content"));
+        if (parsed && typeof parsed.markdown === "string" && parsed.markdown.trim()) {
+          return parsed.markdown;
+        }
+      } catch (_) {}
+    }
+
+    // 0) Fallback escritura: LaTeX intacto si data-message-content no está
     const wb = msgEl.querySelector('[data-writing-block]');
     if (wb) {
       const t = (wb.innerText || "").trim().replace(/^Edit\s*\n/i, "");
       if (t.length > 10) return t;
     }
 
-    // 1) Fuente de verdad: atributo data-message-content con {markdown, html}
+    // 1) (fallback) atributo anidado
     const holder = msgEl.hasAttribute("data-message-content")
       ? msgEl
       : msgEl.querySelector("[data-message-content]");
@@ -297,6 +307,12 @@
       el.replaceWith(rep);
     });
     wrap.querySelectorAll("br").forEach((el) => el.replaceWith("\n"));
+    const esc = (s) => s;
+    wrap.querySelectorAll("pre code").forEach((el) => el.replaceWith(document.createTextNode("```\n" + el.textContent + "\n```")));
+    wrap.querySelectorAll("strong, b").forEach((el) => el.replaceWith(document.createTextNode("**" + esc(el.textContent.trim()) + "**")));
+    wrap.querySelectorAll("em, i").forEach((el) => el.replaceWith(document.createTextNode("*" + esc(el.textContent.trim()) + "*")));
+    wrap.querySelectorAll("code").forEach((el) => { if (el.closest("pre")) return; el.replaceWith(document.createTextNode("`" + el.textContent + "`")); });
+    wrap.querySelectorAll("a").forEach((el) => { const href = el.getAttribute("href") || ""; el.replaceWith(document.createTextNode("[" + esc(el.textContent.trim()) + "](" + href + ")")); });
     const BLOCK = new Set(["P","DIV","H1","H2","H3","H4","H5","H6","LI","UL","OL","TR","TD","TH","PRE","BLOCKQUOTE","TABLE","SECTION","ARTICLE","HR"]);
     let out = "";
     const walk = (node, deep) => {
