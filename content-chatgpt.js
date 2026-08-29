@@ -154,7 +154,11 @@
       buf = [];
     };
     const hasTexCmd = (t) => /\\[A-Za-z]/.test(t);
-    const isProseLine = (t) => /^[^\\]*[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,}/.test(t);
+    const isProseLine = (t) => {
+      const before = t.split("\\")[0];
+      const words = before.match(/\b[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{3,}\b/g);
+      return words ? words.length >= 2 : false;
+    };
     const isTexContent = (t) =>
       t === "}" ||
       (hasTexCmd(t) && !isProseLine(t)) ||
