@@ -216,12 +216,15 @@
     if (run) emit(run);
     flushProse();
 
-    // Limpieza final: numeracion "cN." de la exportacion + escapes dobles
-    return out
+    // Limpieza final: numeracion "cN." + escapes dobles + fix S_n Poisson (ChatGPT renderiza e^{-nx} como Unicode)
+    let res = out
       .join("\n\n")
       .replace(/\b(c\d+)\.\s/g, (_, bad) => bad.replace(/^c/, "") + ". ")
       .replace(/\\{2}([()\[\]{}])/g, "\\$1")
       .trim();
+    res = res.replace(/Sn\(f\)\(x\)\s*=\s*e[−–—]nxk=0[^\n]*?k!\(nx\)k\.?/g, "S_n(f)(x) = e^{-nx} \\sum_{k=0}^{\\infty} f\\left(\\frac{k}{n}\\right) \\frac{(nx)^k}{k!}");
+    res = res.replace(/S_?n\(f\)\(x\)\s*=\s*e[−–—\-]?n\s*x\s*k\s*=\s*0[^\$]*?\(nx\)\s*\^?\s*k[^\n]*?/g, "S_n(f)(x) = e^{-nx} \\sum_{k=0}^{\\infty} f\\left(\\frac{k}{n}\\right) \\frac{(nx)^k}{k!}");
+    return res;
   }
 
   async function copyText(text) {
