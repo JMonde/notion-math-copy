@@ -12,7 +12,8 @@
     "https://*.notion.site/*",
     "https://app.notion.com/*",
     "https://*.notion.com/*",
-    "https://*.notion.app/*"
+    "https://*.notion.app/*",
+    "https://www.google.com/*"
   ],
   "web_accessible_resources": [
     {
@@ -45,6 +46,20 @@
       "js": ["content-notion.js"],
       "css": ["style.css"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.google.com/*"],
+      "js": ["content-google-main.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": ["https://www.google.com/*"],
+      "js": ["content-google.js"],
+      "css": ["style.css"],
+      "run_at": "document_start",
+      "all_frames": true
     }
   ],
   "action": {
