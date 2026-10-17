@@ -2,11 +2,23 @@
   "use strict";
   function conv(t){
     if(!t||t.indexOf("\\")===-1) return t;
-    let r=t;
-    r=r.replace(/\\\(\s*/g,"$$$$").replace(/\s*\\\)/g,"$$$$");
-    r=r.replace(/\\\[\s*/g,"$$$$").replace(/\s*\\\]/g,"$$$$");
-    r=r.replace(/\$\$\s*([^$]+?)\s*\$\$/g,(_,m)=>"$$"+m.trim()+"$$");
-    return r;
+    const parts=t.split(/(```[\s\S]*?```|`[^`\n]*`)/g);
+    for(let i=0;i<parts.length;i+=2){
+      let r=parts[i];
+      if(!r||r.indexOf("\\")===-1) continue;
+      // Pares: \[...\] -> $$...$$ (display, una linea), \(...\) -> $...$ (inline)
+      r=r.replace(/(?<!\\)\\\[([\s\S]*?)(?<!\\)\\\]/g,(_,m)=>{ const one=m.replace(/\s+/g," ").trim(); return one?"$$"+one+"$$":""; });
+      r=r.replace(/(?<!\\)\\\(([\s\S]*?)(?<!\\)\\\)/g,(_,m)=>{ const one=m.replace(/\s+/g," ").trim(); return one?"$"+one+"$":""; });
+      // Restos sin pareja: \[ \] -> $$, \( \) -> $ ("$$" en replacement = "$" literal)
+      r=r.replace(/(?<!\\)\\\[/g,"$$$$").replace(/(?<!\\)\\\]/g,"$$$$");
+      r=r.replace(/(?<!\\)\\\(/g,"$$").replace(/(?<!\\)\\\)/g,"$$");
+      // Colapsa displays a una linea (Notion lo exige) y separa embebidos
+      r=r.replace(/\$\$\s*([^$]+?)\s*\$\$/g,(_,m)=>"$$"+m.replace(/\s+/g," ").trim()+"$$");
+      r=r.replace(/([^\n])(\$\$[^$\n]+?\$\$)/g,"$1\n$2");
+      r=r.replace(/(\$\$[^$\n]+?\$\$)([^\n])/g,"$1\n$2");
+      parts[i]=r;
+    }
+    return parts.join("");
   }
   function patchWriteText(){
     try{

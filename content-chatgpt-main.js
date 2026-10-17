@@ -77,14 +77,14 @@
       }
       if (!t) return;
       const rep = document.createElement("div");
-      rep.textContent = "$$\n" + t + "\n$$";
+      rep.textContent = "$$" + t.replace(/\s+/g, " ").trim() + "$$";
       el.replaceWith(rep);
     });
     clone.querySelectorAll(".katex").forEach((el) => {
       const t = texOf(el);
       if (!t) return;
       const rep = document.createElement("span");
-      rep.textContent = "$" + t + "$";
+      rep.textContent = "$" + t.replace(/\s+/g, " ").trim() + "$";
       el.replaceWith(rep);
     });
 
@@ -142,6 +142,40 @@
 
 // ---------- Portapapeles ----------
 
+  // ---------- Normalizacion de delimitadores LaTeX ----------
+  // ChatGPT emite \[...\] (display) y \(...\) (inline). Notion solo entiende
+  // $$...$$ (display, en UNA linea) y $...$ (inline). Sin esto, las lineas
+  // \[...\] se envolvian como $$\[...\]$$ y Notion no renderizaba (bad paste).
+  // Ej: \[ L(s,\chi)=\sum... \] -> $$L(s,\chi)=\sum...$$
+  function normalizeLatexDelimiters(raw) {
+    if (!raw || raw.indexOf("\\") === -1) return raw;
+    const parts = raw.split(/(```[\s\S]*?```|`[^`\n]*`)/g);
+    for (let i = 0; i < parts.length; i += 2) {
+      let t = parts[i];
+      if (!t || t.indexOf("\\") === -1) continue;
+      t = t.replace(/(?<!\\)\\\[([\s\S]*?)(?<!\\)\\\]/g, (_, inner) => {
+        const one = inner.replace(/\s+/g, " ").trim();
+        return one ? "$$" + one + "$$" : "";
+      });
+      t = t.replace(/(?<!\\)\\\(([\s\S]*?)(?<!\\)\\\)/g, (_, inner) => {
+        const one = inner.replace(/\s+/g, " ").trim();
+        return one ? "$" + one + "$" : "";
+      });
+      // Restos sin pareja (mensaje truncado): no dejar \[ \] \( \) a Notion.
+      // En replacement "$$" = "$" literal y "$$$$" = "$$" literal.
+      t = t.replace(/(?<!\\)\\\[/g, "$$$$").replace(/(?<!\\)\\\]/g, "$$$$");
+      t = t.replace(/(?<!\\)\\\(/g, "$$").replace(/(?<!\\)\\\)/g, "$$");
+      // Displays $$...$$ a UNA linea y sin espacios en bordes (Notion lo exige
+      // para convertir a bloque nativo). [^$] no cruza otros delimitadores.
+      t = t.replace(/\$\$\s*([^$]+?)\s*\$\$/g, (_, m) => "$$" + m.replace(/\s+/g, " ").trim() + "$$");
+      // Displays embebidos en prosa -> su propia linea (Notion exige bloque solo).
+      t = t.replace(/([^\n])(\$\$[^$\n]+?\$\$)/g, "$1\n$2");
+      t = t.replace(/(\$\$[^$\n]+?\$\$)([^\n])/g, "$1\n$2");
+      parts[i] = t;
+    }
+    return parts.join("");
+  }
+
   // ---------- Formato chatgpt -> formato Notion ----------
   // El writing-block de ChatGPT delimita cada display con una linea que es
   // exactamente "$$" (closing-only o pares $$ ... $$), y el cuerpo TeX son
@@ -151,6 +185,7 @@
   // convierte nativo solo si no contienen salto de linea).
   function convertWritingBlock(raw) {
     raw = raw.replace(/^Edit\s*\n/i, "");
+    raw = normalizeLatexDelimiters(raw);
     const lines = raw.split("\n");
     const out = [];
     let buf = [];
@@ -194,6 +229,23 @@
           run = null;
         } else {
           run = { body: [], tex: 0 };
+        }
+        continue;
+      }
+      // Lineas con $ ya normalizadas ($...$ inline o $$...$$ display):
+      // preservarlas tal cual. Sin esto, una prosa con inline como
+      // "El factor es $\log...$ en la cota" se envolvia como
+      // "$$El factor es $\log...$ en la cota$$" y "$\chi_3$" como "$$$\chi_3$$$".
+      if (t.includes("$")) {
+        if (isAtomicDisplay(t)) {
+          flushProse();
+          out.push("$$" + t.slice(2, -2).replace(/\s+/g, " ").trim() + "$$");
+        } else {
+          if (run) {
+            emit(run);
+            run = null;
+          }
+          buf.push(t);
         }
         continue;
       }
@@ -295,7 +347,7 @@
       }
       if (!t) return;
       const rep = document.createElement("div");
-      rep.textContent = "$$\n" + t + "\n$$";
+      rep.textContent = "$$" + t.replace(/\s+/g, " ").trim() + "$$";
       el.replaceWith(rep);
     });
     wrap.querySelectorAll(".katex").forEach((el) => {
@@ -303,7 +355,7 @@
       const t = texOf(el);
       if (!t) return;
       const rep = document.createElement("span");
-      rep.textContent = "$" + t + "$";
+      rep.textContent = "$" + t.replace(/\s+/g, " ").trim() + "$";
       el.replaceWith(rep);
     });
     wrap.querySelectorAll("br").forEach((el) => el.replaceWith("\n"));
