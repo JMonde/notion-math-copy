@@ -48,3 +48,19 @@
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
+.nmc-toast.nmc-ok {
+  background: #143d2b;
+  border: 1px solid #2ecc71;
+}
+.nmc-toast.nmc-warn {
+  background: #4a3200;
+  border: 1px solid #f0a500;
+  white-space: pre-line;
+  max-width: 80vw;
+}
+.nmc-toast.nmc-err {
+  background: #4d1212;
+  border: 1px solid #e5534b;
+  white-space: pre-line;
+  max-width: 80vw;
+}

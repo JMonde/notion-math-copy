@@ -129,6 +129,42 @@
 
 // ---------- Portapapeles ----------
 
+  // ---------- Saneado de portapapeles (anti-carrera) ----------
+  // ChatGPT reescribe el portapapeles con su markdown CRUDO (\\[ .. \\]) unos
+  // ms despues de Ctrl+C. Si esa escritura gana la carrera, la sustitucion
+  // \\[\\] -> $$ se pierde y Obsidian vuelve a recibir \\[ .. \\]. Defensa en
+  // capas: saneamos cualquier texto ANTES de salir hacia el portapapeles, y el
+  // saneado es idempotente (normalizar dos veces no rompe nada), asi que la
+  // reescritura tardia de ChatGPT no puede deshacer la sustitucion.
+  const TEX_DELIM = /\\[\[\]()]/;
+
+  function sanitizeClipboardText(text) {
+    if (typeof text !== "string" || !TEX_DELIM.test(text)) return text;
+    return normalizeLatexDelimiters(text);
+  }
+
+  function patchClipboard() {
+    const clip = navigator.clipboard;
+    if (!clip || clip.__nmcPatched) {
+      nmcLog("patchClipboard: omitido (sin clipboard o ya parcheado)");
+      return;
+    }
+    try {
+      const origWriteText = clip.writeText.bind(clip);
+      const patched = (text) => origWriteText(sanitizeClipboardText(text));
+      Object.defineProperty(clip, "writeText", {
+        value: patched,
+        writable: true,
+        configurable: true,
+      });
+      clip.__nmcPatched = true;
+      nmcLog("patchClipboard: writeText parcheado (saneado activo)");
+    } catch (err) {
+      nmcLog("patchClipboard: no se pudo parchar", String(err));
+      // Seguimos con las otras defensas (copy + keydown).
+    }
+  }
+
   // ---------- Normalizacion de delimitadores LaTeX ----------
   // ChatGPT emite \[...\] (display) y \(...\) (inline). Notion solo entiende
   // $$...$$ (display, en UNA linea) y $...$ (inline). Sin esto, las lineas
@@ -281,11 +317,15 @@
   }
 
   async function copyText(text) {
+    // Saneado idempotente: gana quien escriba ultimo en el portapapeles,
+    // pero ya con \[.. \] convertido a $$ .. $$ por la defensa anti-carrera.
+    text = sanitizeClipboardText(text);
     try {
       await navigator.clipboard.writeText(text);
       // ChatGPT reescribe el portapapeles de forma diferida tras nuestro
-      // keydown; aseguramos que nuestro texto sea el ultimo en quedar.
+      // keydown; re-escribimos en ventanas tardias para quedarnos los ultimos.
       setTimeout(() => navigator.clipboard.writeText(text).catch(() => {}), 300);
+      setTimeout(() => navigator.clipboard.writeText(text).catch(() => {}), 1200);
       return true;
     } catch (_) {
       const ta = document.createElement("textarea");
@@ -380,23 +420,131 @@
       range.commonAncestorContainer.nodeType === 1
         ? range.commonAncestorContainer
         : range.commonAncestorContainer.parentElement;
-    if (!root || !root.closest) return null;
-    // Selectores en orden: el DOM de ChatGPT vario a lo largo del tiempo.
-    const selMsgs = [
-      '[data-message-author-role="assistant"]',
-      '[data-message-author-role]',
-      '[data-message-role="assistant"]',
-      '[data-message-role]',
-      '[data-testid*="assistant"]',
-      '[data-testid="conversation-turn"]',
-      'article[data-msg]',
-    ];
-    for (const s of selMsgs) {
-      const el = root.closest(s);
-      if (el) return el;
+    if (root && root.closest) {
+      // Selectores en orden: el DOM de ChatGPT vario a lo largo del tiempo.
+      const selMsgs = [
+        '[data-message-author-role="assistant"]',
+        '[data-message-author-role]',
+        '[data-message-role="assistant"]',
+        '[data-message-role]',
+        '[data-testid*="assistant"]',
+        '[data-testid="conversation-turn"]',
+        'article[data-msg]',
+        'article',
+      ];
+      for (const s of selMsgs) {
+        const el = root.closest(s);
+        if (el) {
+          nmcLog("messageFromSelection: selector " + s);
+          return el;
+        }
+      }
     }
-    // Ultimo recurso: bloque con math visible dentro del area de seleccion.
+    // Fallback A: el mensaje que intersecta con la seleccion.
+    try {
+      const cands = document.querySelectorAll(
+        '[data-message-author-role="assistant"], [data-message-author-role], article'
+      );
+      for (const el of cands) {
+        try {
+          if (range.intersectsNode(el)) {
+            nmcLog("messageFromSelection: intersectsNode");
+            return el;
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+    // Fallback B: subir desde el ancla hasta el contenedor con mates.
+    // No depende de atributos data-* ni de <article>: sobrevive a redisenos
+    // del DOM de ChatGPT.
+    try {
+      let n = range.commonAncestorContainer;
+      let guard = 0;
+      while (n && guard++ < 18) {
+        const el = n.nodeType === 1 ? n : n.parentElement;
+        if (!el || !el.querySelector || !el.matches) break;
+        if (el.tagName === "MAIN" || el.tagName === "BODY" || el.tagName === "HTML") break;
+        if (
+          el.matches(
+            '.katex, [data-message-content], [data-writing-block], [class*="markdown"], [class*="prose"]'
+          ) ||
+          el.querySelector(
+            '.katex, annotation[encoding="application/x-tex"], [data-message-content], [data-writing-block], [class*="markdown"], [class*="prose"]'
+          )
+        ) {
+          nmcLog("messageFromSelection: contenedor-con-mates (subida " + guard + " niveles)");
+          return el;
+        }
+        n = el.parentElement;
+      }
+    } catch (_) {}
+    nmcLog("messageFromSelection: sin mensaje (selectores + intersectsNode + subida fallaron)");
     return null;
+  }
+
+  // Inspector del DOM real: ejecutar __NMC.inspect() en la consola (F12)
+  // con el texto ya seleccionado y pegar el resultado en el chat.
+  function nmcInspect() {
+    const out = {
+      url: location.href,
+      version: typeof NMC_VERSION !== "undefined" ? NMC_VERSION : "?",
+      articles: document.querySelectorAll("article").length,
+      msgRole: document.querySelectorAll("[data-message-author-role]").length,
+      msgContent: document.querySelectorAll("[data-message-content]").length,
+      writingBlock: document.querySelectorAll("[data-writing-block]").length,
+      katex: document.querySelectorAll(".katex").length,
+      katexDisplay: document.querySelectorAll(".katex-display").length,
+    };
+    const sel = document.getSelection();
+    out.selection = !sel
+      ? "sin getSelection"
+      : {
+          rangeCount: sel.rangeCount,
+          collapsed: sel.isCollapsed,
+          text: sel.toString().slice(0, 200),
+        };
+    const chain = [];
+    try {
+      if (sel && sel.rangeCount) {
+        let n = sel.getRangeAt(0).commonAncestorContainer;
+        let guard = 0;
+        while (n && guard++ < 14) {
+          if (n.nodeType === 1) {
+            const attrs = {};
+            for (const a of Array.from(n.attributes || [])) {
+              if (
+                a.name.indexOf("data-") === 0 ||
+                a.name === "id" ||
+                a.name === "role" ||
+                a.name === "class"
+              ) {
+                attrs[a.name] = String(a.value).slice(0, 100);
+              }
+            }
+            chain.push(n.tagName + " " + JSON.stringify(attrs));
+          } else if (n.nodeType === 3) {
+            chain.push('#text "' + String(n.nodeValue).slice(0, 40) + '"');
+          } else if (n.nodeType === 11) {
+            chain.push("#shadow-root");
+          }
+          const rn = n.getRootNode ? n.getRootNode() : null;
+          const up = n.parentNode || (rn && rn.host);
+          if (!up || up.nodeType === 9) {
+            chain.push(up ? "#document" : "(null)");
+            break;
+          }
+          n = up;
+        }
+      }
+    } catch (err) {
+      chain.push("error: " + String(err));
+    }
+    out.chain = chain;
+    try {
+      console.log("[NMC] inspect", JSON.stringify(out, null, 2));
+    } catch (_) {}
+    nmcLog("inspect listo: pega este objeto en el chat", out);
+    return out;
   }
 
   function buildCopyPayload() {
@@ -421,9 +569,13 @@
       (e) => {
         try {
           const md = buildCopyPayload();
-          if (!md) return;
-          e.clipboardData.setData("text/plain", md);
-          const html = md
+          if (!md) {
+            nmcLog("copy: sin payload (no hay mensaje o no hay $) - dejo copia nativa");
+            return;
+          }
+          const clean = sanitizeClipboardText(md);
+          e.clipboardData.setData("text/plain", clean);
+          const html = clean
             .split("\n")
             .map((l) =>
               l.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -431,7 +583,14 @@
             .join("<br>\n");
           e.clipboardData.setData("text/html", html);
           e.preventDefault();
-          toast("Copiado para Notion \u2713");
+          {
+            const c = nmcReport("copy: interceptado", clean, "copy-event");
+            if (c.residue) {
+              toast("NMC Advertencia: copiado pero quedan restos sin convertir (F12, consola [NMC])", "warn");
+            } else {
+              toast("NMC copiado (" + c.dispOut + " display $$)", "ok");
+            }
+          }
         } catch (_) {
           // ante cualquier error dejamos la copia nativa intacta
         }
@@ -439,28 +598,62 @@
       true
     );
 
+    // Red de seguridad (burbuja, corre DESPUES que los handlers de la pagina):
+    // si ChatGPT llego a escribir \[ .. \] crudo en el portapapeles del propio
+    // evento, lo saneamos aqui igualmente.
+    document.addEventListener("copy", (e) => {
+      try {
+        const raw = e.clipboardData && e.clipboardData.getData("text/plain");
+        const clean = sanitizeClipboardText(raw);
+        if (clean && clean !== raw) {
+          e.clipboardData.setData("text/plain", clean);
+          e.preventDefault();
+          nmcReport("copy: red de seguridad (burbuja) saneo restos", clean, "copy-bubble");
+        }
+      } catch (_) {}
+    });
+
     // Atajo Ctrl+C: ChatGPT re-escribe el portapapeles por su cuenta (handlers
     // propios en window que ganan al evento "copy"). Para no pelear con ellos,
     // interceptamos la tecla ANTES y escribimos nosotros directamente.
     document.addEventListener(
       "keydown",
       (e) => {
-        if (!(e.ctrlKey || e.metaKey) || (e.key.toLowerCase() !== "c")) return;
+        const kcKey = String(e.key || "").toLowerCase();
+        if (!(e.ctrlKey || e.metaKey) || kcKey !== "c") return;
+        if (e.shiftKey || e.altKey) return; // no robar Ctrl+Shift+C (DevTools)
         const md = buildCopyPayload();
         if (!md) {
           const msg = messageFromSelection();
           const fallback = msg && prepareMarkdown(msg);
-          if (!fallback || !fallback.includes("$")) return;
+          if (!fallback || fallback.indexOf("$") === -1) {
+            const selTxt = document.getSelection() ? document.getSelection().toString() : "";
+            nmcLog("keydown: sin payload", { hasMsg: !!msg, selLen: selTxt.length, selPreview: selTxt.slice(0, 80) });
+            if (msg || /\\|\$\$/.test(selTxt)) {
+              toast("NMC Advertencia: no pude extraer formulas, copia nativa (F12, consola [NMC])", "warn");
+            }
+            return;
+          }
           e.preventDefault();
           e.stopImmediatePropagation();
-          copyText(fallback).then((ok) => toast(ok ? "Copiado para Notion \u2713" : "Fallo al copiar"));
+          copyText(fallback).then((ok) => {
+            const c = nmcReport("keydown: copiado (fallback mensaje)", fallback, "keydown-fallback");
+            toast(ok ? ("NMC copiado (" + c.dispOut + " display)") : "NMC Error: fallo al copiar", ok ? "ok" : "err");
+          });
           return;
         }
         e.preventDefault();
         e.stopImmediatePropagation();
-        copyText(md).then((ok) =>
-          toast(ok ? "Copiado para Notion \u2713" : "Fallo al copiar")
-        );
+        copyText(md).then((ok) => {
+          const c = nmcReport("keydown: copiado", md, "keydown");
+          if (!ok) {
+            toast("NMC Error: fallo al copiar", "err");
+          } else if (c.residue) {
+            toast("NMC Advertencia: copiado pero quedan restos sin convertir (F12, consola [NMC])", "warn");
+          } else {
+            toast("NMC copiado (" + c.dispOut + " display $$)", "ok");
+          }
+        });
       },
       true
     );
@@ -497,7 +690,56 @@
     );
   }
 
-  function toast(msg, ms = 2600) {
+  // ---------- Diagnostico visual + logs ----------
+  // Todo lo que hace la extension deja rastro: consola (filtro "[NMC]"),
+  // toast en pagina y objeto window.__NMC (ultima copia + funcion test).
+  const NMC_VERSION = "1.1.0";
+
+  function nmcLog(stage, data) {
+    try {
+      if (data === undefined) console.log("[NMC]", stage);
+      else console.log("[NMC]", stage, data);
+    } catch (_) {}
+  }
+
+  function countMath(text) {
+    const s = text || "";
+    return {
+      dispIn: (s.match(/\\\[/g) || []).length,
+      inlIn: (s.match(/\\\(/g) || []).length,
+      dispOut: (s.match(/\$\$[^$\n]+?\$\$/g) || []).length,
+      residue: /\\\[|\\\]|\\\(|\\\)/.test(s),
+    };
+  }
+
+  function nmcReport(what, md, source) {
+    const c = countMath(md);
+    const info = {
+      time: new Date().toISOString(),
+      what,
+      source: source || "",
+      chars: (md || "").length,
+      dispIn: c.dispIn,
+      inlIn: c.inlIn,
+      dispOut: c.dispOut,
+      residue: c.residue,
+      preview: (md || "").slice(0, 160),
+    };
+    try {
+      window.__NMC = window.__NMC || {};
+      window.__NMC.last = info;
+    } catch (_) {}
+    nmcLog(what, info);
+    return c;
+  }
+
+  function toast(msg, kind, ms) {
+    if (typeof kind === "number") {
+      ms = kind;
+      kind = "ok";
+    }
+    kind = kind || "ok";
+    ms = ms || (kind === "err" ? 5000 : 3200);
     let t = document.querySelector(".nmc-toast");
     if (!t) {
       t = document.createElement("div");
@@ -505,19 +747,25 @@
       document.body.appendChild(t);
     }
     t.textContent = msg;
-    t.classList.add("show");
+    t.classList.remove("nmc-ok", "nmc-warn", "nmc-err");
+    t.classList.add("show", "nmc-" + kind);
     clearTimeout(t._h);
     t._h = setTimeout(() => t.classList.remove("show"), ms);
+    nmcLog("toast", kind + ": " + msg);
   }
 
   async function copyMessage(msgEl, btn) {
     const md = prepareMarkdown(msgEl);
     if (!md) {
-      toast("No se pudo leer el mensaje");
+      toast("NMC Error: no se pudo leer el mensaje", "err");
+      nmcLog("boton: prepareMarkdown vacio");
       return;
     }
     const ok = await copyText(md);
-    toast(ok ? "Copiado para Notion \u2713" : "Fallo al copiar");
+    {
+      const c = nmcReport("boton: copiado", md, "button");
+      toast(ok ? ("NMC copiado (" + c.dispOut + " display)") : "NMC Error: fallo al copiar", ok ? "ok" : "err");
+    }
   }
 
   function ensureButtons() {
@@ -543,8 +791,21 @@
   }
 
   function init() {
+    patchClipboard();
     installCopyInterceptor();
     ensureButtons();
+    try {
+      window.__NMC = window.__NMC || {};
+      window.__NMC.version = NMC_VERSION;
+      window.__NMC.test = (s) => sanitizeClipboardText(convertWritingBlock(String(s)));
+      window.__NMC.rescan = () => {
+        ensureButtons();
+        return document.querySelectorAll(".nmc-copy-btn").length;
+      };
+      window.__NMC.inspect = nmcInspect;
+    } catch (_) {}
+    nmcLog("activo v" + NMC_VERSION + " en " + location.href);
+    toast("NMC activo - selecciona formulas y Ctrl+C (F12, [NMC] para detalle)", "ok");
     new MutationObserver(() => ensureButtons()).observe(
       document.body,
       { childList: true, subtree: true }
